@@ -1,0 +1,440 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: |
+  EC2 Ubuntu 24.04 Base, Docker installed, termination protection enabled,
+  gp3 30GB root volume, automatic AD domain join using AWS Secrets Manager,
+  and NFS mount 10.0.40.71:/ to /efs.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Instance Identification
+        Parameters:
+          - InstanceName
+
+      - Label:
+          default: Mandatory Tags
+        Parameters:
+          - Environment
+          - Application
+          - ITOwner
+
+      - Label:
+          default: Domain Configuration
+        Parameters:
+          - DomainName
+          - DomainJoinUser
+          - DnsIp1
+          - DnsIp2
+
+    ParameterLabels:
+      InstanceName:
+        default: EC2 Instance Name
+      Environment:
+        default: Environment
+      Application:
+        default: Application
+      ITOwner:
+        default: IT Owner
+      DomainName:
+        default: Domain Name
+      DomainJoinUser:
+        default: Domain Join User
+      DnsIp1:
+        default: Primary AD DNS
+      DnsIp2:
+        default: Secondary AD DNS
+
+Parameters:
+
+  InstanceName:
+    Type: String
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: '^[a-zA-Z0-9._-]+$'
+    Description: EC2 instance name
+
+  Environment:
+    Type: String
+    Default: Production
+    AllowedPattern: '^[a-zA-Z0-9._-]+$'
+
+  Application:
+    Type: String
+    Default: Docker
+    AllowedPattern: '^[a-zA-Z0-9._-]+$'
+
+  ITOwner:
+    Type: String
+    Default: Ram Dalal
+    AllowedPattern: '^[a-zA-Z0-9 ._-]+$'
+
+  DomainName:
+    Type: String
+    Description: Active Directory domain
+    Default: doma.corpdir.biz
+    MinLength: 3
+
+  DomainJoinUser:
+    Type: String
+    Description: Domain join service account
+    Default: svc_corp_aws_conn@doma.corpdir.biz
+    MinLength: 3
+
+  DnsIp1:
+    Type: String
+    Description: Primary AD DNS server
+    Default: 10.0.107.230
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+  DnsIp2:
+    Type: String
+    Description: Secondary AD DNS server
+    Default: 10.0.45.101
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+Resources:
+
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+    Properties:
+
+      ImageId: !Sub
+        - '{{resolve:ssm:${AmiParameter}}}'
+        - AmiParameter: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+      InstanceType: t3.medium
+
+      KeyName: Triumph_AWS_Platform_Services
+
+      IamInstanceProfile: tri-common-iamrole-EC2-SSM-Profile
+
+      SubnetId: subnet-0c226fb5c24e8f33b
+
+      SecurityGroupIds:
+        - sg-08c5a26e73ac58a7a
+
+      DisableApiTermination: true
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            DeleteOnTermination: false
+            Encrypted: true
+
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+
+        - Key: Environment
+          Value: !Ref Environment
+
+        - Key: Application
+          Value: !Ref Application
+
+        - Key: ITOwner
+          Value: !Ref ITOwner
+
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          LOG="/var/log/bootstrap.log"
+          exec > >(tee -a "$LOG") 2>&1
+
+          DOMAIN="${DomainName}"
+          JOIN_USER="${DomainJoinUser}"
+          DNS1="${DnsIp1}"
+          DNS2="${DnsIp2}"
+
+          SECRET_ARN="arn:aws:secretsmanager:eu-central-1:923028186899:secret:svc_corp_aws_conn-CAJIS7"
+          AWS_REGION="eu-central-1"
+
+          echo "=========================================="
+          echo "Bootstrap started"
+          echo "=========================================="
+
+          # ---------------------------------------------------------
+          # Hostname
+          # ---------------------------------------------------------
+
+          RAW_NAME="${InstanceName}"
+
+          COMPUTER_NAME=$(echo "$RAW_NAME" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr -cd 'a-z0-9-' \
+            | cut -c1-15)
+
+          if [ -z "$COMPUTER_NAME" ]; then
+            echo "ERROR: Computed hostname is empty."
+            exit 1
+          fi
+
+          hostnamectl set-hostname "$COMPUTER_NAME"
+
+          echo "ComputerName: $COMPUTER_NAME"
+
+
+          # ---------------------------------------------------------
+          # Packages
+          # ---------------------------------------------------------
+
+          echo "Installing required packages..."
+
+          apt-get update -y
+
+          apt-get upgrade -y
+
+          apt-get install -y \
+            nfs-common \
+            ca-certificates \
+            curl \
+            gnupg \
+            lsb-release \
+            jq \
+            awscli \
+            realmd \
+            adcli \
+            sssd \
+            sssd-ad \
+            sssd-tools \
+            libnss-sss \
+            libpam-sss \
+            samba-common-bin \
+            krb5-user \
+            chrony
+
+
+          # ---------------------------------------------------------
+          # DNS - Active Directory DNS servers
+          # ---------------------------------------------------------
+
+          echo "Configuring AD DNS..."
+
+          mkdir -p /etc/systemd/resolved.conf.d
+
+          cat > /etc/systemd/resolved.conf.d/ad.conf <<EOF
+          [Resolve]
+          DNS=$DNS1 $DNS2
+          Domains=$DOMAIN
+          EOF
+
+          systemctl enable systemd-resolved
+          systemctl restart systemd-resolved
+
+          sleep 5
+
+          echo "DNS status:"
+          resolvectl status || true
+
+
+          # ---------------------------------------------------------
+          # Time synchronization
+          # ---------------------------------------------------------
+
+          echo "Configuring chrony..."
+
+          systemctl enable chrony
+          systemctl restart chrony
+
+
+          # ---------------------------------------------------------
+          # Verify AD DNS resolution
+          # ---------------------------------------------------------
+
+          echo "Testing AD DNS resolution..."
+
+          getent hosts "$DOMAIN" || true
+
+          realm discover "$DOMAIN"
+
+
+          # ---------------------------------------------------------
+          # Get AD password from AWS Secrets Manager
+          # ---------------------------------------------------------
+
+          echo "Getting AD credentials from Secrets Manager..."
+
+          SECRET_STRING=$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ARN" \
+            --region "$AWS_REGION" \
+            --query SecretString \
+            --output text)
+
+          PASSWORD=$(echo "$SECRET_STRING" | jq -r '.svc_corp_aws_conn')
+
+          if [ -z "$PASSWORD" ] || [ "$PASSWORD" = "null" ]; then
+            echo "ERROR: Domain password not found in secret."
+            exit 1
+          fi
+
+          echo "AD password retrieved successfully."
+
+
+          # ---------------------------------------------------------
+          # Join Active Directory
+          # ---------------------------------------------------------
+
+          echo "Joining domain: $DOMAIN"
+          echo "Using join account: $JOIN_USER"
+
+          printf '%s\n' "$PASSWORD" | realm join \
+            --user="$JOIN_USER" \
+            "$DOMAIN"
+
+          JOIN_RC=$?
+
+          if [ "$JOIN_RC" -ne 0 ]; then
+            echo "ERROR: AD domain join failed."
+            exit "$JOIN_RC"
+          fi
+
+          echo "Domain join completed successfully."
+
+          unset PASSWORD
+          unset SECRET_STRING
+
+
+          # ---------------------------------------------------------
+          # SSSD
+          # ---------------------------------------------------------
+
+          echo "Configuring SSSD..."
+
+          systemctl enable sssd
+          systemctl restart sssd
+
+          chmod 600 /etc/sssd/sssd.conf
+
+
+          # ---------------------------------------------------------
+          # Allow AD users to authenticate
+          # ---------------------------------------------------------
+
+          echo "Allowing AD users..."
+
+          realm permit --all
+
+
+          # ---------------------------------------------------------
+          # AD group sudo access
+          # ---------------------------------------------------------
+
+          echo "Configuring AD sudo group..."
+
+          cat > /etc/sudoers.d/ad-admins <<EOF
+          %G_CORP_MGT-ACN-UNIX-SVR@$DOMAIN ALL=(ALL) ALL
+          EOF
+
+          chmod 440 /etc/sudoers.d/ad-admins
+
+          visudo -cf /etc/sudoers.d/ad-admins
+
+
+          # ---------------------------------------------------------
+          # Docker
+          # ---------------------------------------------------------
+
+          echo "Installing Docker..."
+
+          install -m 0755 -d /etc/apt/keyrings
+
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+            | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+          chmod a+r /etc/apt/keyrings/docker.gpg
+
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+            > /etc/apt/sources.list.d/docker.list
+
+          apt-get update -y
+
+          apt-get install -y \
+            docker-ce \
+            docker-ce-cli \
+            containerd.io \
+            docker-buildx-plugin \
+            docker-compose-plugin
+
+          systemctl enable docker
+          systemctl start docker
+
+          usermod -aG docker ubuntu || true
+
+
+          # ---------------------------------------------------------
+          # NFS
+          # ---------------------------------------------------------
+
+          echo "Configuring NFS..."
+
+          mkdir -p /efs
+
+          if ! grep -qE '^[[:space:]]*10\.0\.40\.71:/[[:space:]]+/efs[[:space:]]+' /etc/fstab; then
+            echo "10.0.40.71:/ /efs nfs4 defaults,_netdev,nofail 0 0" \
+              >> /etc/fstab
+          fi
+
+          mount -a || true
+
+
+          # ---------------------------------------------------------
+          # Validation
+          # ---------------------------------------------------------
+
+          echo ""
+          echo "=========================================="
+          echo "AD DOMAIN"
+          echo "=========================================="
+
+          realm list || true
+
+          echo ""
+          echo "=========================================="
+          echo "SSSD"
+          echo "=========================================="
+
+          systemctl status sssd --no-pager || true
+
+          echo ""
+          echo "=========================================="
+          echo "DOCKER"
+          echo "=========================================="
+
+          systemctl status docker --no-pager || true
+
+          echo ""
+          echo "=========================================="
+          echo "NFS"
+          echo "=========================================="
+
+          mount | grep " /efs " || true
+
+          echo ""
+          echo "=========================================="
+          echo "BOOTSTRAP COMPLETE"
+          echo "=========================================="
+
+Outputs:
+
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref Ec2Instance
+
+  PrivateIp:
+    Description: Private IP address
+    Value: !GetAtt Ec2Instance.PrivateIp
+
+  AvailabilityZone:
+    Description: Availability Zone
+    Value: !GetAtt Ec2Instance.AvailabilityZone

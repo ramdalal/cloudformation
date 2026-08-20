@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EC2 Ubuntu (latest LTS), Docker installed, termination protection enabled,
+  gp3 30GB root volume, mounts NFS 10.0.40.71:/ to /efs via fstab, and performs
+  automatic Active Directory domain join (realmd/sssd) using AWS Secrets Manager.
+  Grants specified AD groups sudo access after the join.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Identification"
+        Parameters:
+          - InstanceName
+      - Label:
+          default: "Mandatory Tags"
+        Parameters:
+          - Environment
+          - Application
+          - ITOwner
+      - Label:
+          default: "Domain Configuration"
+        Parameters:
+          - DomainName
+          - DomainJoinUser
+          - DnsIp1
+          - DnsIp2
+          - AdSudoGroups
+    ParameterLabels:
+      InstanceName:
+        default: "EC2 Instance Name"
+      Environment:
+        default: "Environment"
+      Application:
+        default: "Application"
+      ITOwner:
+        default: "IT Owner"
+
+Parameters:
+  InstanceName:
+    Type: String
+    Description: Name tag for the EC2 instance (also used as the Linux hostname)
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    ConstraintDescription: "Only alphanumeric characters, dot, underscore, and hyphen are allowed."
+
+  Environment:
+    Type: String
+    Description: Environment tag (mandatory)
+    Default: Production
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+
+  Application:
+    Type: String
+    Description: Application tag (mandatory)
+    Default: Docker
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+
+  ITOwner:
+    Type: String
+    Description: IT Owner tag (mandatory)
+    Default: Ram Dalal
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9 ._-]+$"
+
+  DomainName:
+    Type: String
+    Description: Active Directory domain to join
+    Default: doma.corpdir.biz
+    MinLength: 3
+
+  DomainJoinUser:
+    Type: String
+    Description: Domain join service account (short name, without @domain)
+    Default: svc_corp_aws_conn
+    MinLength: 3
+
+  DnsIp1:
+    Type: String
+    Description: Primary AD DNS server
+    Default: 10.0.107.230
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}$"
+
+  DnsIp2:
+    Type: String
+    Description: Secondary AD DNS server
+    Default: 10.0.45.101
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}$"
+
+  AdSudoGroups:
+    Type: CommaDelimitedList
+    Description: >
+      AD groups (without @domain suffix) granted sudo access and interactive
+      login. Provide as a comma-separated list.
+    Default: "G_CORP_MGT-SVR,G_CORP_MGT-ACN-WIN-SVR,svc_backup_eu"
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+    Properties:
+      ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}"
+      InstanceType: t3.medium
+      KeyName: Triumph_AWS_Platform_Services
+      IamInstanceProfile: tri-common-iamrole-EC2-SSM-Profile
+      SubnetId: subnet-0c226fb5c24e8f33b
+      SecurityGroupIds:
+        - sg-08c5a26e73ac58a7a
+      DisableApiTermination: true
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            DeleteOnTermination: false
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ITOwner
+          Value: !Ref ITOwner
+
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |-
+              #!/bin/bash
+              set -euxo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+
+              LOG=/var/log/bootstrap.log
+              log() { echo "$(date -Is) $*" | tee -a "$LOG"; }
+
+              DOMAIN="${DomainName}"
+              JOIN_USER="${DomainJoinUser}"
+              DNS1="${DnsIp1}"
+              DNS2="${DnsIp2}"
+              RAW_NAME="${InstanceName}"
+              AD_GROUPS="${AdGroupsCsv}"
+              SECRET_ARN="arn:aws:secretsmanager:eu-central-1:923028186899:secret:svc_corp_aws_conn-CAJIS7"
+              REGION="eu-central-1"
+
+              log "Bootstrap start"
+
+              # ---------------- Base packages + Docker (unchanged baseline) ----------------
+              apt-get update -y
+              apt-get upgrade -y
+              apt-get install -y nfs-common ca-certificates curl gnupg lsb-release unzip jq
+
+              install -m 0755 -d /etc/apt/keyrings
+              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+              chmod a+r /etc/apt/keyrings/docker.gpg
+
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+              $(. /etc/os-release && echo "${!VERSION_CODENAME}") stable" \
+              > /etc/apt/sources.list.d/docker.list
+
+              apt-get update -y
+              apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+              systemctl enable docker
+              systemctl start docker
+              usermod -aG docker ubuntu || true
+
+              mkdir -p /efs
+              if ! grep -qE '^\s*10\.0\.40\.71:/\s+/efs\s+' /etc/fstab; then
+                echo "10.0.40.71:/ /efs nfs4 defaults,_netdev,nofail 0 0" >> /etc/fstab
+              fi
+              mount -a || true
+
+              # ---------------- Domain join (ported from Windows baseline) ----------------
+              # Install AWS CLI v2 (needed to read the join secret from Secrets Manager)
+              if ! command -v aws >/dev/null 2>&1; then
+                curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+                unzip -q /tmp/awscliv2.zip -d /tmp
+                /tmp/aws/install
+              fi
+
+              # AD domain-join tooling
+              apt-get install -y realmd sssd sssd-tools adcli samba-common-bin \
+                                 krb5-user packagekit libnss-sss libpam-sss oddjob oddjob-mkhomedir
+
+              # Set hostname from InstanceName (sanitised, <= 63 chars)
+              HOSTNAME=$(echo "${!RAW_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g' | cut -c1-63)
+              if [ -z "${!HOSTNAME}" ]; then log "ERROR: computed hostname empty"; exit 1; fi
+              hostnamectl set-hostname "${!HOSTNAME}.${!DOMAIN}"
+              log "Hostname set: ${!HOSTNAME}.${!DOMAIN}"
+
+              # Configure DNS to the AD DNS servers via systemd-resolved
+              mkdir -p /etc/systemd/resolved.conf.d
+              cat > /etc/systemd/resolved.conf.d/ad-dns.conf <<EOF
+              [Resolve]
+              DNS=${!DNS1} ${!DNS2}
+              Domains=${!DOMAIN}
+              EOF
+              systemctl restart systemd-resolved
+              log "DNS set: ${!DNS1}, ${!DNS2}"
+
+              # Fetch the join password from Secrets Manager (JSON key: svc_corp_aws_conn)
+              SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${!SECRET_ARN}" \
+                            --query SecretString --output text --region "${!REGION}")
+              JOIN_PW=$(echo "${!SECRET_JSON}" | jq -r '.svc_corp_aws_conn')
+              if [ -z "${!JOIN_PW}" ] || [ "${!JOIN_PW}" = "null" ]; then
+                log "ERROR: password key svc_corp_aws_conn not found in secret JSON"; exit 1
+              fi
+              log "Secret fetched; password length: ${!#JOIN_PW}"
+
+              # Join the domain (retry up to 10 times while DNS/AD becomes reachable)
+              joined=0
+              for i in $(seq 1 10); do
+                if echo "${!JOIN_PW}" | realm join --user="${!JOIN_USER}" "${!DOMAIN}" --verbose; then
+                  joined=1
+                  log "Domain join succeeded on attempt ${!i}"
+                  break
+                fi
+                log "Domain join attempt ${!i} failed; retrying in 30s"
+                sleep 30
+              done
+              if [ "${!joined}" -ne 1 ]; then log "ERROR: domain join failed"; unset JOIN_PW; exit 1; fi
+
+              # ---------- Self-healing verification (post-join testjoin + single re-join) ----------
+              # The initial cloud-init join can leave the local keytab out of sync with AD
+              # (KVNO/password mismatch), which passes 'realm join' but fails Kerberos auth.
+              # Verify with adcli testjoin; if it fails, do ONE clean leave + re-join.
+              verify_join() { adcli testjoin --domain="${!DOMAIN}" >/dev/null 2>&1; }
+              if verify_join; then
+                log "adcli testjoin passed on first join"
+              else
+                log "adcli testjoin FAILED after initial join; performing one clean re-join"
+                realm leave "${!DOMAIN}" || true
+                rejoined=0
+                for j in $(seq 1 5); do
+                  if echo "${!JOIN_PW}" | realm join --user="${!JOIN_USER}" "${!DOMAIN}" --verbose; then
+                    rejoined=1
+                    log "Re-join succeeded on attempt ${!j}"
+                    break
+                  fi
+                  log "Re-join attempt ${!j} failed; retrying in 30s"
+                  sleep 30
+                done
+                if [ "${!rejoined}" -ne 1 ]; then log "ERROR: re-join failed"; unset JOIN_PW; exit 1; fi
+                if verify_join; then
+                  log "adcli testjoin passed after re-join"
+                else
+                  log "ERROR: adcli testjoin still failing after re-join"; unset JOIN_PW; exit 1
+                fi
+              fi
+              unset JOIN_PW
+
+              # Allow login with short username (no @domain suffix) and auto-create home dirs
+              if grep -q '^use_fully_qualified_names' /etc/sssd/sssd.conf; then
+                sed -i 's/^use_fully_qualified_names.*/use_fully_qualified_names = False/' /etc/sssd/sssd.conf
+              else
+                echo "use_fully_qualified_names = False" >> /etc/sssd/sssd.conf
+              fi
+              if ! grep -q 'fallback_homedir' /etc/sssd/sssd.conf; then
+                echo "fallback_homedir = /home/%u" >> /etc/sssd/sssd.conf
+              fi
+              pam-auth-update --enable mkhomedir || true
+              systemctl restart sssd
+
+              # Grant AD admin groups sudo access (Linux equivalent of local Administrators)
+              # Groups come from the AdSudoGroups parameter (comma-separated, no @domain).
+              DOM_PREFIX=$(echo "${!DOMAIN}" | cut -d. -f1 | tr '[:lower:]' '[:upper:]')
+              : > /etc/sudoers.d/ad-admins
+              PERMIT_ARGS=""
+              IFS=',' read -ra GRP_ARR <<< "${!AD_GROUPS}"
+              for g in "${!GRP_ARR[@]}"; do
+                g=$(echo "$g" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                [ -z "$g" ] && continue
+                printf '%%%s\\\\%s ALL=(ALL) ALL\n' "${!DOM_PREFIX}" "${!g}" >> /etc/sudoers.d/ad-admins
+                PERMIT_ARGS="${!PERMIT_ARGS} ${!g}@${!DOMAIN}"
+              done
+              chmod 0440 /etc/sudoers.d/ad-admins
+              log "sudo access granted to groups: ${!AD_GROUPS}"
+
+              # Restrict interactive login to those groups plus the join account
+              # shellcheck disable=SC2086
+              realm permit -g ${!PERMIT_ARGS} || true
+
+              log "Domain join and configuration complete"
+            - AdGroupsCsv: !Join [ ",", !Ref AdSudoGroups ]
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref Ec2Instance
+
+  PrivateIp:
+    Description: Private IP address
+    Value: !GetAtt Ec2Instance.PrivateIp
+
+  AvailabilityZone:
+    Description: Availability Zone
+    Value: !GetAtt Ec2Instance.AvailabilityZone

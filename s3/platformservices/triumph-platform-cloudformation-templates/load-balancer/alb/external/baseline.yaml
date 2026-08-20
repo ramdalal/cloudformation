@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Application Load Balancer with Target Group, Listeners and ACM Certificate
+
+Parameters:
+  LoadBalancerName:
+    Type: String
+    Default: "ALB-Enter-Name-Here"
+    Description: Name of the Application Load Balancer
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: "vpc-00f71706f98ac5b0b"
+    Description: VPC ID for the load balancer
+
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-00b195b693e20a950"
+    Description: Subnet A ID
+
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-0b3a8d73ba4aa91c7"
+    Description: Subnet B ID
+
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: "sg-0593545d553b3142b"
+    Description: Security Group ID for the ALB
+
+  CertificateArn:
+    Type: String
+    Default: "arn:aws:acm:eu-central-1:923028186899:certificate/3ad6e69a-00f4-4028-85f0-fea3565d7b38"
+    Description: ACM Certificate ARN for HTTPS listener
+
+  TargetGroupName:
+    Type: String
+    Default: "TG-identity-triumph-com"
+    Description: Name of the Target Group
+
+  TargetGroupProtocolVersion:
+    Type: String
+    Default: "HTTP1"
+    AllowedValues: [HTTP1, HTTP2]
+    Description: Protocol version for the Target Group
+
+  HealthCheckProtocol:
+    Type: String
+    Default: "HTTP"
+    AllowedValues: [HTTP, HTTPS]
+    Description: Protocol for Target Group health checks
+
+  HealthCheckPath:
+    Type: String
+    Default: "/index.html"
+    Description: Health check path
+
+  TargetInstanceId:
+    Type: String
+    Default: ""
+    Description: EC2 Instance ID to register with the Target Group (e.g. i-0123456789abcdef0)
+
+  TagApplication:
+    Type: String
+    Default: "ALB-enter-application-name"
+    Description: Application tag value
+
+  TagEnvironment:
+    Type: String
+    Default: "Production"
+    Description: Environment tag value
+
+  TagOwner:
+    Type: String
+    Default: "Ram Dalal"
+    Description: Owner tag value
+
+Conditions:
+  HasTargetInstance: !Not [!Equals [!Ref TargetInstanceId, ""]]
+
+Resources:
+
+  # ─────────────────────────────────────────
+  # Target Group
+  # ─────────────────────────────────────────
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Ref TargetGroupName
+      Port: 80
+      Protocol: HTTP
+      ProtocolVersion: !Ref TargetGroupProtocolVersion
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: !Ref HealthCheckProtocol
+      HealthCheckIntervalSeconds: 6
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Targets: !If
+        - HasTargetInstance
+        - - Id: !Ref TargetInstanceId
+            Port: 80
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Ref TargetGroupName
+        - Key: Application
+          Value: !Ref TagApplication
+        - Key: Environment
+          Value: !Ref TagEnvironment
+        - Key: Owner
+          Value: !Ref TagOwner
+
+  # ─────────────────────────────────────────
+  # Application Load Balancer
+  # ─────────────────────────────────────────
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref LoadBalancerName
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Type: application
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      SecurityGroups:
+        - !Ref SecurityGroupId
+      Tags:
+        - Key: Name
+          Value: !Ref LoadBalancerName
+        - Key: Application
+          Value: !Ref TagApplication
+        - Key: Environment
+          Value: !Ref TagEnvironment
+        - Key: Owner
+          Value: !Ref TagOwner
+
+  # ─────────────────────────────────────────
+  # Listener: Port 80 → Redirect to 443
+  # ─────────────────────────────────────────
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+
+  # ─────────────────────────────────────────
+  # Listener: Port 443 → Forward to Target Group
+  # ─────────────────────────────────────────
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+Outputs:
+  LoadBalancerArn:
+    Description: ARN of the Application Load Balancer
+    Value: !Ref ApplicationLoadBalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-ALB-ARN"
+
+  LoadBalancerDNSName:
+    Description: DNS Name of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-ALB-DNS"
+
+  TargetGroupArn:
+    Description: ARN of the Target Group
+    Value: !Ref ALBTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TG-ARN"
+
+  HTTPSListenerArn:
+    Description: ARN of the HTTPS Listener
+    Value: !Ref HTTPSListener
+    Export:
+      Name: !Sub "${AWS::StackName}-HTTPS-Listener-ARN"

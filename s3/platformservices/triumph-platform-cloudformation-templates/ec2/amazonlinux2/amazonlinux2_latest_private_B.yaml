@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EC2 Amazon Linux 2 (latest), Docker installed, termination protection enabled,
+  gp3 30GB root volume, and mounts NFS 10.0.40.71:/ to /efs via fstab.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Identification"
+        Parameters:
+          - InstanceName
+      - Label:
+          default: "Mandatory Tags"
+        Parameters:
+          - Environment
+          - Application
+          - ITOwner
+    ParameterLabels:
+      InstanceName:
+        default: "EC2 Instance Name"
+      Environment:
+        default: "Environment"
+      Application:
+        default: "Application"
+      ITOwner:
+        default: "IT Owner"
+
+Parameters:
+  InstanceName:
+    Type: String
+    Description: Name tag for the EC2 instance
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    ConstraintDescription: "Only alphanumeric characters, dot, underscore, and hyphen are allowed."
+
+  Environment:
+    Type: String
+    Description: Environment tag (mandatory)
+    Default: Production
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    ConstraintDescription: "Environment cannot be empty."
+
+  Application:
+    Type: String
+    Description: Application tag (mandatory)
+    Default: Docker
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    ConstraintDescription: "Application cannot be empty."
+
+  ITOwner:
+    Type: String
+    Description: IT Owner tag (mandatory)
+    Default: Ram Dalal
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9 ._-]+$"
+    ConstraintDescription: "IT Owner cannot be empty."
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+    Properties:
+      # Always resolves latest Amazon Linux 2 AMI at stack creation
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}"
+
+      InstanceType: t3.medium
+      KeyName: Triumph_AWS_Platform_Services
+
+      # Attach SSM IAM Instance Profile
+      IamInstanceProfile: tri-common-iamrole-EC2-SSM-Profile
+
+      SubnetId: subnet-049a0077447b66408
+      SecurityGroupIds:
+        - sg-08c5a26e73ac58a7a
+
+      # Enable termination protection
+      DisableApiTermination: true
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            DeleteOnTermination: false
+            Encrypted: true
+
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ITOwner
+          Value: !Ref ITOwner
+
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euxo pipefail
+
+          yum update -y
+
+          # Install Docker
+          amazon-linux-extras install docker -y
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ec2-user || true
+
+          # Install Docker Compose v2 (plugin)
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/download/v2.25.0/docker-compose-linux-x86_64 \
+          -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+
+          # Install NFS utilities
+          yum install -y nfs-utils
+
+          # Create mount directory
+          mkdir -p /efs
+
+          # Add NFS mount to fstab if not already present
+          if ! grep -qE '^\s*10\.0\.40\.71:/\s+/efs\s+' /etc/fstab; then
+            echo "10.0.40.71:/ /efs nfs4 defaults,_netdev,nofail 0 0" >> /etc/fstab
+          fi
+
+          # Mount all filesystems
+          mount -a || true
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref Ec2Instance
+
+  PrivateIp:
+    Description: Private IP address
+    Value: !GetAtt Ec2Instance.PrivateIp
+
+  AvailabilityZone:
+    Description: Availability Zone
+    Value: !GetAtt Ec2Instance.AvailabilityZone

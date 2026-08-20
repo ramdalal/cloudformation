@@ -1,0 +1,58 @@
+# Step 1: Import required libraries
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS CloudFormation template to create an EC2 instance'
+
+# Step 2: Define AWS resources
+Resources:
+
+  # Create an EC2 instance
+  EC2Instance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: 'ami-004e960cde33f9146'
+      InstanceType: 't3.xlarge'
+      KeyName: 'Triumph_AWS_Platform_Services'
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            Encrypted: false
+            DeleteOnTermination: false
+            Iops: 3000
+            SnapshotId: 'snap-0ed54b80545d52883'
+            VolumeSize: 50
+            VolumeType: 'gp3'
+            #Throughput: 125
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeviceIndex: 0
+          GroupSet:
+            - 'sg-08c5a26e73ac58a7a'
+          SubnetId: 'subnet-0c226fb5c24e8f33b'
+      CreditSpecification:
+        CPUCredits: 'unlimited'
+      MetadataOptions:
+        HttpEndpoint: 'enabled'
+        HttpPutResponseHopLimit: 2
+        HttpTokens: 'required'
+      PrivateDnsNameOptions:
+        HostnameType: 'ip-name'
+        EnableResourceNameDnsARecord: false
+        EnableResourceNameDnsAAAARecord: false
+      Tags:
+        - Key: 'Name'
+          Value: 'FR0APLLGITL01'
+
+# Step 3: Define output values
+Outputs:
+  InstanceId:
+    Description: 'The Instance ID'
+    Value: !Ref 'EC2Instance'
+
+#Reasoning:
+#1) Libraries and their versions used: AWS CloudFormation (version 2010-09-09)
+#2) AWS resources impacted: AWS::EC2::Instance
+#3) AWS actions performed: Create an EC2 instance with specified configurations
+#4) Explanation:
+#   - The YAML creates an EC2 instance with the specified configurations from the CLI commands
+#   - It sets the instance image ID, instance type, key pair, block device mapping, network interface, CPU credit specification, metadata options, private DNS name options, and tags
+#   - The output section provides the Instance ID of created EC2 instance
