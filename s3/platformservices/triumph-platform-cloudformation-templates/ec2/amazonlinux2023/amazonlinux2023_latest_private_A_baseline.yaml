@@ -16,7 +16,7 @@ Metadata:
           - Environment
           - Application
           - ITOwner
-    ParameterLabels:
+    ParameterLabels:   
       InstanceName:
         default: "EC2 Instance Name"
       Environment:
