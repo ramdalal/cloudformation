@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     AWS_REGION   = 'eu-central-1'
-    CFN_BUCKET   = 'triumph-awsinfraops-cfn-eu-central-1'
+    CFN_BUCKET   = 'triumph-platform-cloudformation-templates'
     TEMPLATE_DIR = 'templates'
     PARAM_NAME   = 'ServerName'   // parameter in your template for the instance Name tag
   }
