@@ -30,6 +30,7 @@ Parameters:
   InstanceName:
     Type: String
     Description: Name tag for the EC2 instance
+    Default: jenkinsgithub
     MinLength: 1
     MaxLength: 128
     AllowedPattern: "^[a-zA-Z0-9._-]+$"
