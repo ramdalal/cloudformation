@@ -128,7 +128,7 @@ def deployTemplate(String path, String stack) {
         CAP_ARG="--capabilities $CAPS"
       fi
 
-      # 1pass the stack name in as a parameter, only if the template declares it
+      # pass the stack name in as a parameter, only if the template declares it
       HAS=$(aws cloudformation get-template-summary \
               --template-url "$URL" --region "$AWS_REGION" \
               --query "length(Parameters[?ParameterKey=='${PARAM_NAME}'])" \
