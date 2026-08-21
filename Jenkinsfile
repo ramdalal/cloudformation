@@ -105,7 +105,7 @@ def stackNameFor(String path) {
 def deployTemplate(String path, String stack) {
   withEnv(["TPL=${path}", "STACK=${stack}"]) {
     sh '''
-      set -euo pipefail
+      set -euo pipefail 
 
       FILE=$(basename "$TPL")
       KEY="cfn/${STACK}/${GIT_SHA}/${FILE}"
@@ -128,7 +128,7 @@ def deployTemplate(String path, String stack) {
         CAP_ARG="--capabilities $CAPS"
       fi
 
-      # pass the stack name in as a parameter, only if the template declares it
+      # 1pass the stack name in as a parameter, only if the template declares it
       HAS=$(aws cloudformation get-template-summary \
               --template-url "$URL" --region "$AWS_REGION" \
               --query "length(Parameters[?ParameterKey=='${PARAM_NAME}'])" \
