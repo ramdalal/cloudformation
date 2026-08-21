@@ -12,7 +12,7 @@ pipeline {
     timestamps()
     buildDiscarder(logRotator(numToKeepStr: '20'))
     disableConcurrentBuilds()
-    ansiColor('xterm')
+   
   }
 
   triggers { githubPush() }
