@@ -108,7 +108,7 @@ def deployTemplate(String path, String stack) {
       set -euo pipefail 
 
       FILE=$(basename "$TPL")
-      KEY="cfn/${STACK}/${GIT_SHA}/${FILE}"
+      KEY="deployed/${STACK}/${GIT_SHA}/${FILE}"
       URL="https://${CFN_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${KEY}"
 
       echo "--- validating $TPL"
