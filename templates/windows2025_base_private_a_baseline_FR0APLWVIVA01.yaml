@@ -79,7 +79,7 @@ Resources:
       ImageId: !Sub '{{resolve:ssm:/aws/service/ami-windows-latest/Windows_Server-2025-English-Full-Base}}'
       InstanceType: t3.medium
       KeyName: Triumph_AWS_Platform_Services_Windows
-      IamInstanceProfile: EC2-DomainJoin-Secrets-SSM
+      IamInstanceProfile: tri-common-iamrole-EC2-SSM-Profile
 
       SubnetId: subnet-0c226fb5c24e8f33b
       SecurityGroupIds:
