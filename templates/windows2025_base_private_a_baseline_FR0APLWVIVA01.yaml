@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  EC2 Windows Server 2025 Base (latest), termination protection enabled, gp3 30GB root volume,
+  automatic domain join using AWS Secrets Manager. Adds specified domain groups/users to local Administrators after reboot.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Instance Identification
+        Parameters:
+          - InstanceName
+      - Label:
+          default: Mandatory Tags
+        Parameters:
+          - Environment
+          - Application
+          - ITOwner
+      - Label:
+          default: Domain Configuration
+        Parameters:
+          - DomainName
+          - DomainJoinUser
+          - DnsIp1
+          - DnsIp2
+
+Parameters:
+  InstanceName:
+    Type: String
+    MinLength: 1
+    Default: FR0APLWVIVA01
+    MaxLength: 128
+    AllowedPattern: '^[a-zA-Z0-9._-]+$'
+
+  Environment:
+    Type: String
+    Default: Production
+    AllowedPattern: '^[a-zA-Z0-9._-]+$'
+
+  Application:
+    Type: String
+    Default: Windows
+    AllowedPattern: '^[a-zA-Z0-9._-]+$'
+
+  ITOwner:
+    Type: String
+    Default: Ram Dalal
+    AllowedPattern: '^[a-zA-Z0-9 ._-]+$'
+
+  DomainName:
+    Type: String
+    Default: doma.corpdir.biz
+    MinLength: 3
+
+  DomainJoinUser:
+    Type: String
+    Description: Domain join service account (UPN format recommended)
+    Default: svc_corp_aws_conn@doma.corpdir.biz
+    MinLength: 3
+
+  DnsIp1:
+    Type: String
+    Description: Primary AD DNS server
+    Default: 10.0.107.230
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+  DnsIp2:
+    Type: String
+    Description: Secondary AD DNS server
+    Default: 10.0.45.101
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-windows-latest/Windows_Server-2025-English-Full-Base}}'
+      InstanceType: t3.medium
+      KeyName: Triumph_AWS_Platform_Services_Windows
+      IamInstanceProfile: EC2-DomainJoin-Secrets-SSM
+
+      SubnetId: subnet-0c226fb5c24e8f33b
+      SecurityGroupIds:
+        - sg-08c5a26e73ac58a7a
+
+      DisableApiTermination: true
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            DeleteOnTermination: false
+            Encrypted: true
+
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ITOwner
+          Value: !Ref ITOwner
+
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          $ErrorActionPreference = "Stop"
+          $log = "C:\bootstrap.log"
+          function Log($m){ Add-Content -Path $log -Value ("{0} {1}" -f (Get-Date -Format s), $m) }
+
+          $domain = "${DomainName}"
+          $user   = "${DomainJoinUser}"
+          $dns1   = "${DnsIp1}"
+          $dns2   = "${DnsIp2}"
+          $secretArn = "arn:aws:secretsmanager:eu-central-1:923028186899:secret:svc_corp_aws_conn-CAJIS7"
+
+          Log "Bootstrap start"
+
+          # Wait for NIC up
+          $iface = $null
+          for ($i=1; $i -le 30; $i++) {
+            $iface = (Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1).Name
+            if ($iface) { break }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $iface) { throw "No active network adapter found." }
+          Log ("NIC up: {0}" -f $iface)
+
+          # Set DNS
+          Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses @($dns1, $dns2)
+          Log ("DNS set: {0}, {1}" -f $dns1, $dns2)
+
+          # Get secret JSON (AWS Tools preferred, CLI fallback)
+          $secretString = $null
+          try {
+            if (Get-Command Get-SECSecretValue -ErrorAction SilentlyContinue) {
+              $resp = Get-SECSecretValue -SecretId $secretArn -ErrorAction Stop
+              $secretString = $resp.SecretString
+              Log "Secret fetched via AWS Tools"
+            } else {
+              throw "AWS Tools not found"
+            }
+          } catch {
+            if (Get-Command aws -ErrorAction SilentlyContinue) {
+              $secretString = (aws secretsmanager get-secret-value --secret-id $secretArn --query SecretString --output text)
+              Log "Secret fetched via AWS CLI"
+            } else {
+              throw "Neither AWS Tools nor AWS CLI available."
+            }
+          }
+
+          $secretString = $secretString.Trim()
+
+          # Secret is JSON like {"svc_corp_aws_conn":"fitARA627parit"}
+          $pwObj = $secretString | ConvertFrom-Json
+          $password = $pwObj."svc_corp_aws_conn"
+          if (-not $password) { throw "Password key 'svc_corp_aws_conn' not found in secret JSON." }
+          $password = $password.Trim()
+          Log ("Password length: {0}" -f $password.Length)
+
+          # Compute Windows computer name from InstanceName (<= 15 chars)
+          $rawName = "${InstanceName}"
+          $computerName = $rawName -replace '[^A-Za-z0-9-]', ''
+          if ($computerName.Length -gt 15) { $computerName = $computerName.Substring(0,15) }
+          if (-not $computerName) { throw "Computed computerName is empty. Check InstanceName." }
+          Log ("ComputerName: {0}" -f $computerName)
+
+          # --- Post-domain-join local admin additions (run after reboot) ---
+          $scriptDir  = "C:\ProgramData\Amazon"
+          $scriptPath = "$scriptDir\post-domainjoin.ps1"
+          New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+
+          @'
+          $ErrorActionPreference="Stop"
+          $localGroup="Administrators"
+          $members=@(
+            "DOMA\G_CORP_MGT-SVR",
+            "DOMA\G_CORP_MGT-ACN-WIN-SVR",
+            "DOMA\svc_backup_eu"
+          )
+
+          for($a=1;$a -le 20;$a++){
+            try{
+              foreach($m in $members){
+                $exists = Get-LocalGroupMember -Group $localGroup -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $m }
+                if(-not $exists){
+                  Add-LocalGroupMember -Group $localGroup -Member $m
+                }
+              }
+              schtasks /Delete /TN "\PostDomainJoin-AddAdmins" /F | Out-Null
+              exit 0
+            }catch{
+              Start-Sleep -Seconds 30
+            }
+          }
+          exit 1
+          '@ | Set-Content -Path $scriptPath -Encoding UTF8
+
+          $taskCreateOut = schtasks /Create /TN "\PostDomainJoin-AddAdmins" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F 2>&1
+          $taskRc = $LASTEXITCODE
+          Log ("schtasks create rc={0}" -f $taskRc)
+          Log ("schtasks create output: {0}" -f ($taskCreateOut -join " | "))
+          if ($taskRc -ne 0) { throw "schtasks /Create failed" }
+
+          # Join domain + rename, then reboot
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential ($user, $secure)
+
+          Log "Joining domain..."
+          Add-Computer -NewName $computerName -DomainName $domain -Credential $cred -Force
+          Log "Join command succeeded; rebooting"
+          Restart-Computer -Force
+          </powershell>
+
+Outputs:
+  InstanceId:
+    Value: !Ref Ec2Instance
+  PrivateIp:
+    Value: !GetAtt Ec2Instance.PrivateIp
+  AvailabilityZone:
+    Value: !GetAtt Ec2Instance.AvailabilityZone
