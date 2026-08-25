@@ -1,0 +1,20 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  G.I.A CI/CD workflow probe. Created to verify the dev -> pull request -> main flow end to end.
+  This is NEVER merged and is deleted again immediately; if you are reading it in the repo,
+  something interrupted the cleanup and it is safe to delete.
+
+Metadata:
+  GIA:
+    baseline: workflow-probe
+    composedBy: dalalra01
+    account: "923028186899"
+    region: eu-central-1
+    selections: []
+
+Resources:
+  GiaWorkflowProbeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /gia/cicd-workflow-probe
+      RetentionInDays: 1
