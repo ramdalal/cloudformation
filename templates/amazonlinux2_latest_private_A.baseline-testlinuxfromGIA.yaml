@@ -93,7 +93,7 @@ Resources:
         - DeviceName: /dev/xvda
           Ebs:
             VolumeType: gp3
-            VolumeSize: 40
+            VolumeSize: 50
             DeleteOnTermination: false
             Encrypted: true
 
