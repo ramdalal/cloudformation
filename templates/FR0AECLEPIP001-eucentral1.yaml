@@ -9,7 +9,8 @@ Metadata:
     composedBy: dalalra01
     account: "923028186899"
     region: eu-central-1
-    selections: []
+    selections:
+      - ec2/i-0fcec830378e713d7 (FR0AECLEPIP001)
 
 Resources:
   Ec2Instance:
