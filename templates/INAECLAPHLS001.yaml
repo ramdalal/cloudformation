@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  INAECLAPHLS001 (i-0433be9c54731f535) and its resources, as deployed in 133762292990/ap-south-1.
+
+Metadata:
+  GIA:
+    generatedFor: i-0433be9c54731f535
+    serverName: INAECLAPHLS001
+    account: "133762292990"
+    region: ap-south-1
+    generatedBy: dalalra01
+    note: >-
+      Generated from the live resources by the G.I.A CI/CD console -- a faithful description of this server as it is, not derived from any baseline. Property fidelity matters: resource import validates only a resource's identifier, so a template that misstates a property is adopted silently and the next stack update corrects the SERVER to match it. THIS TEMPLATE IS FOR IMPORT, not for creating a new stack. Imported, CloudFormation ADOPTS the existing instance and volumes named in Metadata.GIA.import and creates nothing -- no disk is replaced and no data is touched. Deployed as a NEW stack instead, every resource here is created fresh: a new instance with a new empty root volume, and any DataVolume created empty and NOT attached, because AWS::EC2::VolumeAttachment cannot be imported and so is not declared. Security groups are referenced by id, never redefined, so the same groups are used either way and the stack does not own them. UserData is absent: the API does not return it in usable form for a running instance, and inventing it would produce a template that rebuilds a blank machine.
+    # Physical ids an import must be given, keyed by logical id.
+    import:
+      Ec2Instance: i-0433be9c54731f535
+      DataVolume1: vol-09044c878ac55fb49
+      ElasticIp:
+        PublicIp: 13.205.244.49
+        AllocationId: eipalloc-06a3ad1c307da53f5
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    # Retain is REQUIRED for import, and is what stops a stack delete from
+    # destroying a machine that existed before the stack did.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: ami-0f773f6afe60479c9
+      InstanceType: t3.medium
+      SubnetId: subnet-0c315e5d857d93a1b
+      KeyName: INAECLAPHLS001-fortinet-key
+      # private IP 10.0.87.175 -- NOT declared: adding this property forces instance replacement, and the address is already held by this instance, so the replacement could never succeed
+      # availability zone ap-south-1a -- NOT declared: implied by SubnetId, and adding it forces replacement
+      DisableApiTermination: false
+      SecurityGroupIds:
+        - sg-02ddc222fa989e93e
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 2
+            Encrypted: false
+            DeleteOnTermination: false
+      Tags:
+        - Key: Env
+          Value: prod
+        - Key: Name
+          Value: INAECLAPHLS001
+        - Key: Owner
+          Value: rebeca.cacho
+        - Key: Project
+          Value: Fortinet_SDWAN_migration
+
+  DataVolume1:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: ap-south-1a
+      Size: 30
+      VolumeType: gp2
+      Encrypted: false
+      Tags:
+        - Key: Env
+          Value: prod
+        - Key: Name
+          Value: INAECLAPHLS001-root
+        - Key: Project
+          Value: Fortinet_SDWAN_migration
+      # attached to i-0433be9c54731f535 at /dev/sdb
+
+  # AWS::EC2::VolumeAttachment cannot be IMPORTED, so it is commented out rather
+  # than declared. Once the stack exists, uncomment this and deploy as a NORMAL
+  # update -- that is permitted, and is how a volume actually gets attached.
+  # DataVolume1Attachment:
+  #   Type: AWS::EC2::VolumeAttachment
+  #   Properties:
+  #     Device: /dev/sdb
+  #     InstanceId: !Ref Ec2Instance
+  #     VolumeId: !Ref DataVolume1
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Domain: vpc
+      # currently 13.205.244.49 on i-0433be9c54731f535
+      Tags:
+        - Key: Name
+          Value: INAECLAPHLS001-ENI0-EIP
