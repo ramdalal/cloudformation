@@ -227,15 +227,22 @@ def deployTemplate(String path, String stack, String deployRegion) {
       # So: carry over what the stack already has with UsePreviousValue, and pass the stack name
       # explicitly for PARAM_NAME as before. Declared-but-unheld parameters are named in the
       # failure rather than left to surface as CloudFormation's list.
+      # `--output text` on a list returns ONE line of TAB-separated values, not spaces. `for W in
+      # $WANTS` splits on tabs happily (IFS has one), but a `case " $HELD " in *" $W "*)`
+      # membership test does NOT — the separator either side of a name is a tab, so the pattern
+      # never matches and every parameter looks unheld. That is precisely how this went out
+      # wrong the first time: the logic was checked against hand-written space-separated strings
+      # rather than against what the command actually emits, so it passed a test and failed the
+      # build. Normalised to spaces at the source, once, so every test below is a space test.
       WANTS=$(aws cloudformation get-template-summary \
                 --template-body "file://${TPL}" --region "$DEPLOY_REGION" \
-                --query 'Parameters[].ParameterKey' --output text 2>/dev/null || true)
+                --query 'Parameters[].ParameterKey' --output text 2>/dev/null | tr '\t' ' ' || true)
       NODEFAULT=$(aws cloudformation get-template-summary \
                 --template-body "file://${TPL}" --region "$DEPLOY_REGION" \
-                --query 'Parameters[?DefaultValue==null].ParameterKey' --output text 2>/dev/null || true)
+                --query 'Parameters[?DefaultValue==null].ParameterKey' --output text 2>/dev/null | tr '\t' ' ' || true)
       HELD=$(aws cloudformation describe-stacks \
                --stack-name "$STACK" --region "$DEPLOY_REGION" \
-               --query 'Stacks[0].Parameters[].ParameterKey' --output text 2>/dev/null || true)
+               --query 'Stacks[0].Parameters[].ParameterKey' --output text 2>/dev/null | tr '\t' ' ' || true)
 
       # Built separately for create and update: on a create there is no previous value to use,
       # so UsePreviousValue is not merely wrong there, it is rejected.
