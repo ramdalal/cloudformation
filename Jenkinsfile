@@ -86,8 +86,9 @@ pipeline {
           env.TEMPLATES.split(' ').each { path ->
             def stack = stackNameFor(path)
             def region = regionFor(path)
-            stage("deploy ${stack} (${region})") {
-              deployTemplate(path, stack, region)
+            def account = accountFor(path)
+            stage("deploy ${stack} (${region}${account ? ' / ' + account : ''})") {
+              deployTemplate(path, stack, region, account)
             }
           }
         }
@@ -168,8 +169,53 @@ def regionFor(String path) {
   return found
 }
 
-def deployTemplate(String path, String stack, String deployRegion) {
-  withEnv(["TPL=${path}", "STACK=${stack}", "DEPLOY_REGION=${deployRegion}"]) {
+/**
+ * Which ACCOUNT a template deploys into.
+ *
+ * THIS WAS MISSING, AND IT WAS THE MOST DANGEROUS GAP IN THE PIPELINE. regionFor() made the
+ * target region a property of the template; the account stayed implicit, so every deploy landed
+ * wherever Jenkins itself runs. A template for a server in another account therefore looked for
+ * its stack HERE, did not find it, and ran create-stack HERE - building a NEW machine in the
+ * wrong account instead of updating the real one.
+ *
+ * Observed, not theorised: FR0BEXWGLSES008 was imported into a stack in 474668429793, and this
+ * job then created a stack of the same name in 923028186899 which failed with "Not authorized
+ * for image". That failure is the only reason there is no duplicate server - had the AMI and
+ * subnet ids been valid here, it would have built one.
+ *
+ * The console writes Metadata.GIA.account into every template it produces, so the information
+ * was there all along and simply never read.
+ */
+def accountFor(String path) {
+  def acct = null
+  def inMeta = false
+  def inGia = false
+  readFile(path).split('\n').each { line ->
+    if (acct != null) return
+    if (line ==~ /^Metadata:\s*$/) { inMeta = true; return }
+    if (line ==~ /^\S.*/) { inMeta = false; inGia = false; return }
+    if (inMeta && line ==~ /^  GIA:\s*$/) { inGia = true; return }
+    if (inGia && line ==~ /^  \S.*/) { inGia = false; return }
+    if (inGia) {
+      def m = (line =~ /^\s+account:\s*(.+?)\s*$/)
+      if (m) acct = m[0][1].replaceAll(/^["']|["']$/, '').trim()
+    }
+  }
+  if (!acct) {
+    echo "${path}: no Metadata.GIA.account - deploying in this job's own account"
+    return ''
+  }
+  if (!(acct ==~ /^[0-9]{12}$/)) {
+    error("${path}: Metadata.GIA.account is '${acct}', which is not a 12-digit account id.")
+  }
+  return acct
+}
+
+
+def deployTemplate(String path, String stack, String deployRegion,
+                   String account = '') {
+  withEnv(["TPL=${path}", "STACK=${stack}", "DEPLOY_REGION=${deployRegion}",
+           "TARGET_ACCOUNT=${account}"]) {
     sh '''
       set -euo pipefail 
 
@@ -200,6 +246,56 @@ def deployTemplate(String path, String stack, String deployRegion) {
       echo "--- archiving to s3://${CFN_BUCKET}/${KEY}"
       aws s3 cp "$TPL" "s3://${CFN_BUCKET}/${KEY}" \
         --region "$BUCKET_REGION" --only-show-errors
+
+      # ── FROM HERE ON, OPERATE IN THE TEMPLATE'S OWN ACCOUNT ──────────────────────────
+      #
+      # Placed AFTER the artifact upload on purpose: the bucket lives in one account and is the
+      # audit trail for every deploy regardless of target, so it is written with this job's own
+      # credentials. Everything below is CloudFormation and must land where the server is.
+      #
+      # Without this the pipeline looked for a stack that lives elsewhere, did not find it, and
+      # ran create-stack HERE - a second copy of a running server, in the wrong account.
+      # Observed: FR0BEXWGLSES008 was imported into a stack in 474668429793 and this job created
+      # a same-named stack in 923028186899, which failed only because the AMI was not shareable.
+      #
+      # FAILS LOUDLY rather than falling back. A fallback to "deploy locally" is precisely the
+      # behaviour being removed: it is silent, and what it silently does is build a duplicate
+      # production machine.
+      HERE=$(aws sts get-caller-identity --query Account --output text)
+      if [ -n "${TARGET_ACCOUNT:-}" ] && [ "$TARGET_ACCOUNT" != "$HERE" ]; then
+        echo "--- target account $TARGET_ACCOUNT differs from this job's account $HERE;"
+        echo "    assuming CrossAccountAdminRole there"
+        ROLE="arn:aws:iam::${TARGET_ACCOUNT}:role/CrossAccountAdminRole"
+        set +e
+        CREDS=$(aws sts assume-role --role-arn "$ROLE" \
+                  --role-session-name "jenkins-${STACK}" \
+                  --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+                  --output text 2>&1)
+        RC=$?
+        set -e
+        if [ $RC -ne 0 ]; then
+          echo "!!! could not assume $ROLE" >&2
+          echo "!!! $CREDS" >&2
+          echo "!!! Refusing to continue: deploying in $HERE would create a SECOND copy of" >&2
+          echo "!!! this server in the wrong account. Grant this job sts:AssumeRole on that" >&2
+          echo "!!! role, and add this job's principal to its trust policy in $TARGET_ACCOUNT." >&2
+          exit 3
+        fi
+        AWS_ACCESS_KEY_ID=$(echo "$CREDS" | cut -f1)
+        AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | cut -f2)
+        AWS_SESSION_TOKEN=$(echo "$CREDS" | cut -f3)
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+        # Verified, not assumed. A mis-scoped role landing somewhere unintended is the exact
+        # failure this block exists to make impossible.
+        NOW=$(aws sts get-caller-identity --query Account --output text)
+        if [ "$NOW" != "$TARGET_ACCOUNT" ]; then
+          echo "!!! assumed a role but landed in $NOW, not $TARGET_ACCOUNT. Refusing." >&2
+          exit 3
+        fi
+        echo "--- now operating in $NOW"
+      else
+        echo "--- deploying in this job's own account ($HERE)"
+      fi
 
       # capabilities the template actually needs
       CAPS=$(aws cloudformation get-template-summary \
@@ -279,10 +375,48 @@ def deployTemplate(String path, String stack, String deployRegion) {
                  --stack-name "$STACK" --region "$DEPLOY_REGION" \
                  --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NONE")
 
-      # a stack stuck in ROLLBACK_COMPLETE can never be updated, only deleted
+      # ── A STACK IN ROLLBACK_COMPLETE ─────────────────────────────────────────────────
+      #
+      # Such a stack cannot be updated, only deleted and recreated. That was done
+      # unconditionally, and it is unsafe for two distinct reasons found the hard way:
+      #
+      #  1. A stack created by RESOURCE IMPORT owns live production resources. Deleting it
+      #     orphans them (DeletionPolicy: Retain keeps them, unmanaged) and the recreate then
+      #     builds a SECOND copy of the server alongside the original. Never do this to a stack
+      #     that owns anything.
+      #  2. In these accounts the org guardrail (tri-common-DenyAllDeleteResources) DENIES
+      #     cloudformation:DeleteStack outright, so the call fails and `set -e` kills the build
+      #     with an opaque AccessDenied — and the stack name stays blocked forever, because
+      #     nothing in this pipeline or the console can clear it.
+      #
+      # So: only a stack owning ZERO resources is deleted, which is the genuine "failed create
+      # left a shell behind" case this branch was written for. Anything else stops the build with
+      # an explanation instead of doing damage.
       if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
-        echo "--- $STACK is in ROLLBACK_COMPLETE; deleting before recreate"
-        aws cloudformation delete-stack --stack-name "$STACK" --region "$DEPLOY_REGION"
+        OWNED=$(aws cloudformation describe-stack-resources \
+                  --stack-name "$STACK" --region "$DEPLOY_REGION" \
+                  --query 'length(StackResources)' --output text 2>/dev/null || echo 0)
+        if [ "$OWNED" != "0" ] && [ "$OWNED" != "None" ]; then
+          echo "!!! $STACK is ROLLBACK_COMPLETE but owns $OWNED resource(s)." >&2
+          echo "!!! Refusing to delete it. If this stack was created by a resource import, its" >&2
+          echo "!!! resources are LIVE: deleting the stack would orphan them and the recreate" >&2
+          echo "!!! would build a second copy of the server. Resolve it by hand." >&2
+          exit 4
+        fi
+        echo "--- $STACK is ROLLBACK_COMPLETE and owns no resources; deleting before recreate"
+        set +e
+        DEL=$(aws cloudformation delete-stack --stack-name "$STACK" \
+                --region "$DEPLOY_REGION" 2>&1)
+        DRC=$?
+        set -e
+        if [ $DRC -ne 0 ]; then
+          echo "!!! could not delete the empty stack $STACK:" >&2
+          echo "!!! $DEL" >&2
+          echo "!!! If this is AccessDenied, the org deletion guardrail denies DeleteStack in" >&2
+          echo "!!! this account and the name cannot be reused until it is removed from the" >&2
+          echo "!!! management account. Nothing was changed." >&2
+          exit 4
+        fi
         aws cloudformation wait stack-delete-complete \
           --stack-name "$STACK" --region "$DEPLOY_REGION"
         STATUS="NONE"
