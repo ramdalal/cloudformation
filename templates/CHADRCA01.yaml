@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CHADRCA01 (i-0b8db2692c6a6f24e) and its resources, as deployed in 133762292990/eu-central-1.
+
+Metadata:
+  GIA:
+    generatedFor: i-0b8db2692c6a6f24e
+    serverName: CHADRCA01
+    account: "133762292990"
+    region: eu-central-1
+    generatedBy: dalalra01
+    note: >-
+      Generated from the live resources by the G.I.A CI/CD console -- a faithful description of this server as it is, not derived from any baseline. Property fidelity matters: resource import validates only a resource's identifier, so a template that misstates a property is adopted silently and the next stack update corrects the SERVER to match it. THIS TEMPLATE IS FOR IMPORT, not for creating a new stack. Imported, CloudFormation ADOPTS the existing instance and volumes named in Metadata.GIA.import and creates nothing -- no disk is replaced and no data is touched. Deployed as a NEW stack instead, every resource here is created fresh: a new instance with a new empty root volume, and any DataVolume created empty and NOT attached, because AWS::EC2::VolumeAttachment cannot be imported and so is not declared. Security groups are referenced by id, never redefined, so the same groups are used either way and the stack does not own them. UserData is absent: the API does not return it in usable form for a running instance, and inventing it would produce a template that rebuilds a blank machine.
+    # Physical ids an import must be given, keyed by logical id.
+    import:
+      Ec2Instance: i-0b8db2692c6a6f24e
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    # Retain is REQUIRED for import, and is what stops a stack delete from
+    # destroying a machine that existed before the stack did.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: ami-0d162b030c543783a
+      InstanceType: t3.medium
+      SubnetId: subnet-df162cb4
+      IamInstanceProfile: Admin_VPC_Triumph_Europe
+      # private IP 10.0.40.104 -- NOT declared: adding this property forces instance replacement, and the address is already held by this instance, so the replacement could never succeed
+      # availability zone eu-central-1a -- NOT declared: implied by SubnetId, and adding it forces replacement
+      DisableApiTermination: false
+      SecurityGroupIds:
+        - sg-01a5c775cd071cced
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 32
+            Encrypted: true
+            DeleteOnTermination: false
+      Tags:
+        - Key: AWSApplicationMigrationServiceManaged
+          Value: mgn.amazonaws.com
+        - Key: AWSApplicationMigrationServiceSourceServerID
+          Value: s-1ae236290aeec8225
+        - Key: AWSMigration
+          Value: 'Yes'
+        - Key: 'Accenture Supported'
+          Value: 'Yes'
+        - Key: Application
+          Value: 'PKI enterprise'
+        - Key: 'Application Name'
+          Value: 'PKI enterprise CA-Server'
+        - Key: 'Application Owner'
+          Value: 'Michael Geiger'
+        - Key: BackupType
+          Value: VeeamSnapshot
+        - Key: CloudWatchAgent
+          Value: 'Yes'
+        - Key: Description
+          Value: 'Migrated from CHADRCA01(PKI enterprise Intermediate CA-Server for CORPCA1)'
+        - Key: Domain
+          Value: DOMA
+        - Key: DownsizedDateTime
+          Value: 2025-08-22T13:00:25Z
+        - Key: Environment
+          Value: Production
+        - Key: FromType
+          Value: c5.large
+        - Key: IsDomainJoined
+          Value: 'Yes'
+        - Key: Name
+          Value: CHADRCA01
+        - Key: OS
+          Value: Windows
+        - Key: OSType
+          Value: Windows
+        - Key: 'Operating System'
+          Value: 'Windows Server 2012 Standard'
+        - Key: Owner
+          Value: 'Michael Geiger'
+        - Key: 'Patch Group'
+          Value: ''
+        - Key: Service
+          Value: ''
+        - Key: ServiceGroup
+          Value: ''
+        - Key: Severity
+          Value: High
+        - Key: tr:AWSBackup
+          Value: application-daily
