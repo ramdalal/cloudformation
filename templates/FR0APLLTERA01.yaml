@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EC2 Ubuntu (latest LTS), Docker installed, termination protection enabled,
+  gp3 30GB root volume, and mounts NFS 10.0.40.71:/ to /efs via fstab.
+
+Metadata:
+  GIA:
+    account: 923028186899
+    region: eu-central-1
+    annotatedBy: dalalra01
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Identification"
+        Parameters:
+          - InstanceName
+      - Label:
+          default: "Mandatory Tags"
+        Parameters:
+          - Environment
+          - Application
+          - ITOwner
+    ParameterLabels:
+      InstanceName:
+        default: "EC2 Instance Name"
+      Environment:
+        default: "Environment"
+      Application:
+        default: "Application"
+      ITOwner:
+        default: "IT Owner"
+
+Parameters:
+  InstanceName:
+    Type: String
+    Description: Name tag for the EC2 instance
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    ConstraintDescription: "Only alphanumeric characters, dot, underscore, and hyphen are allowed."
+
+  Environment:
+    Type: String
+    Description: Environment tag (mandatory)
+    Default: Production
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+
+  Application:
+    Type: String
+    Description: Application tag (mandatory)
+    Default: Docker
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+
+  ITOwner:
+    Type: String
+    Description: IT Owner tag (mandatory)
+    Default: Ram Dalal
+    MinLength: 1
+    AllowedPattern: "^[a-zA-Z0-9 ._-]+$"
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+    Properties:
+      # ? Always resolves latest Ubuntu LTS at stack creation
+      ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}"
+
+
+      InstanceType: t3.medium
+      KeyName: Triumph_AWS_Platform_Services
+
+      SubnetId: subnet-0c226fb5c24e8f33b
+      SecurityGroupIds:
+        - sg-08c5a26e73ac58a7a
+
+      DisableApiTermination: true
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            DeleteOnTermination: false
+            Encrypted: true
+
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ITOwner
+          Value: !Ref ITOwner
+
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          apt-get update -y
+          apt-get upgrade -y
+          apt-get install -y nfs-common ca-certificates curl gnupg lsb-release
+
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          chmod a+r /etc/apt/keyrings/docker.gpg
+
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+          $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+          > /etc/apt/sources.list.d/docker.list
+
+          apt-get update -y
+          apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ubuntu || true
+
+          mkdir -p /efs
+          if ! grep -qE '^\s*10\.0\.40\.71:/\s+/efs\s+' /etc/fstab; then
+            echo "10.0.40.71:/ /efs nfs4 defaults,_netdev,nofail 0 0" >> /etc/fstab
+          fi
+          mount -a || true
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref Ec2Instance
+
+  PrivateIp:
+    Description: Private IP address
+    Value: !GetAtt Ec2Instance.PrivateIp
+
+  AvailabilityZone:
+    Description: Availability Zone
+    Value: !GetAtt Ec2Instance.AvailabilityZone
