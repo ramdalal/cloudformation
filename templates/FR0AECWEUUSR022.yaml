@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  FR0AECWEUUSR022 (i-07010aaddf7a20c55) and its resources, as deployed in 133762292990/eu-central-1.
+
+Metadata:
+  GIA:
+    generatedFor: i-07010aaddf7a20c55
+    serverName: FR0AECWEUUSR022
+    account: "133762292990"
+    region: eu-central-1
+    generatedBy: dalalra01
+    note: >-
+      Generated from the live resources by the G.I.A CI/CD console -- a faithful description of this server as it is, not derived from any baseline. Property fidelity matters: resource import validates only a resource's identifier, so a template that misstates a property is adopted silently and the next stack update corrects the SERVER to match it. THIS TEMPLATE IS FOR IMPORT, not for creating a new stack. Imported, CloudFormation ADOPTS the existing instance and volumes named in Metadata.GIA.import and creates nothing -- no disk is replaced and no data is touched. Deployed as a NEW stack instead, every resource here is created fresh: a new instance with a new empty root volume, and any DataVolume created empty and NOT attached, because AWS::EC2::VolumeAttachment cannot be imported and so is not declared. Security groups are referenced by id, never redefined, so the same groups are used either way and the stack does not own them. UserData is absent: the API does not return it in usable form for a running instance, and inventing it would produce a template that rebuilds a blank machine.
+    # Physical ids an import must be given, keyed by logical id.
+    import:
+      Ec2Instance: i-07010aaddf7a20c55
+      DataVolume1: vol-0d2efa389e6975708
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    # Retain is REQUIRED for import, and is what stops a stack delete from
+    # destroying a machine that existed before the stack did.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: ami-05c1ab5f558a70698
+      InstanceType: t3.medium
+      SubnetId: subnet-a60270db
+      KeyName: triumph_frankfurt_directconnect_key
+      IamInstanceProfile: Admin_VPC_Triumph_Europe
+      # private IP 10.0.41.84 -- NOT declared: adding this property forces instance replacement, and the address is already held by this instance, so the replacement could never succeed
+      # availability zone eu-central-1b -- NOT declared: implied by SubnetId, and adding it forces replacement
+      DisableApiTermination: false
+      SecurityGroupIds:
+        - sg-01a5c775cd071cced
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 120
+            Encrypted: true
+            DeleteOnTermination: false
+      Tags:
+        - Key: BackupType
+          Value: NotConfigured
+        - Key: Category
+          Value: Test
+        - Key: 'Cloud Watch Agent Status'
+          Value: 'Installed '
+        - Key: Description
+          Value: 'New VM with Win10 OS as Lab for testing'
+        - Key: Environment
+          Value: Development
+        - Key: Name
+          Value: FR0AECWEUUSR022
+        - Key: Owner
+          Value: 'Thodoris Afentras'
+        - Key: 'Server Owner'
+          Value: 'Thodoris Afentras'
+        - Key: Severity
+          Value: Medium
+        - Key: tr:AWSBackup
+          Value: nobackup
+
+  DataVolume1:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: eu-central-1b
+      Size: 120
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: tr:AWSBackup
+          Value: data
+        - Key: tr:BackupType
+          Value: VeeamSnapshot
+      # attached to i-07010aaddf7a20c55 at xvdb
+
+  # AWS::EC2::VolumeAttachment cannot be IMPORTED, so it is commented out rather
+  # than declared. Once the stack exists, uncomment this and deploy as a NORMAL
+  # update -- that is permitted, and is how a volume actually gets attached.
+  # DataVolume1Attachment:
+  #   Type: AWS::EC2::VolumeAttachment
+  #   Properties:
+  #     Device: xvdb
+  #     InstanceId: !Ref Ec2Instance
+  #     VolumeId: !Ref DataVolume1
