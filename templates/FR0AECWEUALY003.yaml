@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  FR0AECWEUALY003 (i-00480930f5d3ba724) and its resources, as deployed in 133762292990/eu-central-1.
+
+Metadata:
+  GIA:
+    generatedFor: i-00480930f5d3ba724
+    serverName: FR0AECWEUALY003
+    account: "133762292990"
+    region: eu-central-1
+    generatedBy: dalalra01
+    note: >-
+      Generated from the live resources by the G.I.A CI/CD console -- a faithful description of this server as it is, not derived from any baseline. Property fidelity matters: resource import validates only a resource's identifier, so a template that misstates a property is adopted silently and the next stack update corrects the SERVER to match it. THIS TEMPLATE IS FOR IMPORT, not for creating a new stack. Imported, CloudFormation ADOPTS the existing instance and volumes named in Metadata.GIA.import and creates nothing -- no disk is replaced and no data is touched. Deployed as a NEW stack instead, every resource here is created fresh: a new instance with a new empty root volume, and any DataVolume created empty and NOT attached, because AWS::EC2::VolumeAttachment cannot be imported and so is not declared. Security groups are referenced by id, never redefined, so the same groups are used either way and the stack does not own them. UserData is absent: the API does not return it in usable form for a running instance, and inventing it would produce a template that rebuilds a blank machine.
+    # Physical ids an import must be given, keyed by logical id.
+    import:
+      Ec2Instance: i-00480930f5d3ba724
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    # Retain is REQUIRED for import, and is what stops a stack delete from
+    # destroying a machine that existed before the stack did.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: ami-032c954118df38cd0
+      InstanceType: t3.large
+      SubnetId: subnet-df162cb4
+      KeyName: triumph_frankfurt_directconnect_key
+      # private IP 10.0.40.221 -- NOT declared: adding this property forces instance replacement, and the address is already held by this instance, so the replacement could never succeed
+      # availability zone eu-central-1a -- NOT declared: implied by SubnetId, and adding it forces replacement
+      DisableApiTermination: false
+      SecurityGroupIds:
+        - sg-01a5c775cd071cced
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 50
+            Encrypted: false
+            DeleteOnTermination: false
+      Tags:
+        - Key: Application
+          Value: Alloy
+        - Key: BackupType
+          Value: VeeamSnapshot
+        - Key: Environment
+          Value: Production
+        - Key: Name
+          Value: FR0AECWEUALY003
+        - Key: OS
+          Value: 'Windows Server 2022'
+        - Key: 'Server Function'
+          Value: 'Alloy Agent'
+        - Key: Severity
+          Value: Medium
+        - Key: tr:AWSBackup
+          Value: application-daily
