@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  FR0APLLWAZI01 (i-0336203110a629c99) and its resources, as deployed in 923028186899/eu-central-1.
+
+Metadata:
+  GIA:
+    generatedFor: i-0336203110a629c99
+    serverName: FR0APLLWAZI01
+    account: "923028186899"
+    region: eu-central-1
+    generatedBy: dalalra01
+    note: >-
+      Generated from the live resources by the G.I.A CI/CD console -- a faithful description of this server as it is, not derived from any baseline. Property fidelity matters: resource import validates only a resource's identifier, so a template that misstates a property is adopted silently and the next stack update corrects the SERVER to match it. THIS TEMPLATE IS FOR IMPORT, not for creating a new stack. Imported, CloudFormation ADOPTS the existing instance and volumes named in Metadata.GIA.import and creates nothing -- no disk is replaced and no data is touched. Deployed as a NEW stack instead, every resource here is created fresh: a new instance with a new empty root volume, and any DataVolume created empty and NOT attached, because AWS::EC2::VolumeAttachment cannot be imported and so is not declared. Security groups are referenced by id, never redefined, so the same groups are used either way and the stack does not own them. UserData is absent: the API does not return it in usable form for a running instance, and inventing it would produce a template that rebuilds a blank machine.
+    # Physical ids an import must be given, keyed by logical id.
+    import:
+      Ec2Instance: i-0336203110a629c99
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    # Retain is REQUIRED for import, and is what stops a stack delete from
+    # destroying a machine that existed before the stack did.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: ami-074dd8e8dac7651a5
+      InstanceType: r6i.large
+      SubnetId: subnet-0c226fb5c24e8f33b
+      KeyName: Triumph_AWS_Platform_Services
+      IamInstanceProfile: wazuh-ec2-ssm-profile
+      # private IP 10.0.112.171 -- NOT declared: adding this property forces instance replacement, and the address is already held by this instance, so the replacement could never succeed
+      # availability zone eu-central-1a -- NOT declared: implied by SubnetId, and adding it forces replacement
+      DisableApiTermination: false
+      SecurityGroupIds:
+        - sg-0c31c473d7f24cfb4
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 200
+            Encrypted: false
+            DeleteOnTermination: false
+      Tags:
+        - Key: Application
+          Value: Wazuh
+        - Key: BackupType
+          Value: VeeamSnapshot
+        - Key: DeployedBy
+          Value: Terraform
+        - Key: Description
+          Value: 'Wazuh Indexer'
+        - Key: Environment
+          Value: Test
+        - Key: Name
+          Value: FR0APLLWAZI01
+        - Key: Owner
+          Value: 'Thomas Eisner'
+        - Key: Role
+          Value: wazuh-indexer
+        - Key: tr:AWSBackup
+          Value: application-daily
