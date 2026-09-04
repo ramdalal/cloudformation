@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  FR0AEXWGLCON021 (i-0caedcc58bf09379d) and its resources, as deployed in 474668429793/eu-central-1.
+
+Metadata:
+  GIA:
+    generatedFor: i-0caedcc58bf09379d
+    serverName: FR0AEXWGLCON021
+    account: "474668429793"
+    region: eu-central-1
+    generatedBy: dalalra01
+    note: >-
+      Generated from the live resources by the G.I.A CI/CD console -- a faithful description of this server as it is, not derived from any baseline. Property fidelity matters: resource import validates only a resource's identifier, so a template that misstates a property is adopted silently and the next stack update corrects the SERVER to match it. THIS TEMPLATE IS FOR IMPORT, not for creating a new stack. Imported, CloudFormation ADOPTS the existing instance and volumes named in Metadata.GIA.import and creates nothing -- no disk is replaced and no data is touched. Deployed as a NEW stack instead, every resource here is created fresh: a new instance with a new empty root volume, and any DataVolume created empty and NOT attached, because AWS::EC2::VolumeAttachment cannot be imported and so is not declared. Security groups are referenced by id, never redefined, so the same groups are used either way and the stack does not own them. UserData is absent: the API does not return it in usable form for a running instance, and inventing it would produce a template that rebuilds a blank machine.
+    # Physical ids an import must be given, keyed by logical id.
+    import:
+      Ec2Instance: i-0caedcc58bf09379d
+      DataVolume1: vol-0d49eb49d90cbe480
+
+Resources:
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    # Retain is REQUIRED for import, and is what stops a stack delete from
+    # destroying a machine that existed before the stack did.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: ami-016c25765a1fa5a76
+      InstanceType: t3.large
+      SubnetId: subnet-01fd781b99960f8b3
+      KeyName: Triumph-External-Partners-Final
+      IamInstanceProfile: veeambackup
+      # private IP 10.0.249.94 -- NOT declared: adding this property forces instance replacement, and the address is already held by this instance, so the replacement could never succeed
+      # availability zone eu-central-1a -- NOT declared: implied by SubnetId, and adding it forces replacement
+      DisableApiTermination: false
+      SecurityGroupIds:
+        - sg-0deb5119e678db904
+      BlockDeviceMappings:
+        - DeviceName: '/dev/sda1'
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            Encrypted: false
+            DeleteOnTermination: false
+      Tags:
+        - Key: BackupType
+          Value: VeeamSnapshot
+        - Key: Description
+          Value: 'Test Connection Broker'
+        - Key: Environment
+          Value: Test
+        - Key: Name
+          Value: FR0AEXWGLCON021
+        - Key: tr:AWSBackup
+          Value: application-daily
+
+  DataVolume1:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: eu-central-1a
+      Size: 125
+      VolumeType: st1
+      Encrypted: false
+      Tags:
+        - Key: Name
+          Value: ProfileTest
+      # attached to i-0caedcc58bf09379d at xvdb
+
+  # AWS::EC2::VolumeAttachment cannot be IMPORTED, so it is commented out rather
+  # than declared. Once the stack exists, uncomment this and deploy as a NORMAL
+  # update -- that is permitted, and is how a volume actually gets attached.
+  # DataVolume1Attachment:
+  #   Type: AWS::EC2::VolumeAttachment
+  #   Properties:
+  #     Device: xvdb
+  #     InstanceId: !Ref Ec2Instance
+  #     VolumeId: !Ref DataVolume1
